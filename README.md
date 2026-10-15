@@ -19,7 +19,7 @@ What pss-seo-inspector can do:
   Google's matching rules (`*` and `$` wildcards, longest match wins);
 - detect the platform from HTML, headers and asset paths, and apply shared plus
   platform-specific rules with platform-aware fix guidance;
-- run 60+ data-driven rules across indexing, metadata, structured data, images,
+- run 54 data-driven rules across indexing, metadata, structured data, images,
   content, and platform specifics, each finding carrying a URL and evidence
   (status/redirect chain or HTML snippet);
 - measure Core Web Vitals and performance with Google PageSpeed Insights

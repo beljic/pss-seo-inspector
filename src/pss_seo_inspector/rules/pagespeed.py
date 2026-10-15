@@ -5,17 +5,38 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from ..models import Severity
-from ..pagespeed import PageSpeedResult  # noqa: F401 — used in type hints
+from ..pagespeed import PageSpeedResult
 from .base import AuditContext, Issue, Manual, Outcome, Rule
 
 
-def _perf01(ctx: AuditContext) -> Iterable[Outcome]:
+def _perf_preamble(ctx: AuditContext) -> tuple[list[Outcome], list[PageSpeedResult]]:
+    """Shared PERF-rule prologue.
+
+    Returns the manual notes a PERF rule must always emit and the measurable
+    results it should evaluate. If no PSI data was collected at all, the single
+    "no data" manual note is returned. Otherwise every result whose fetch failed
+    becomes a manual note that names the URL and the (already scrubbed) error, so
+    an all-failed run never counts as a pass; the successful results are returned
+    for the caller to turn into Issues.
+    """
     if not ctx.crawl.pagespeed_results:
-        yield Manual("No PageSpeed Insights data available for this crawl")
-        return
+        return [Manual("No PageSpeed Insights data available for this crawl")], []
+    manual: list[Outcome] = []
+    ok: list[PageSpeedResult] = []
     for result in ctx.crawl.pagespeed_results:
         if result.error is not None:
-            continue
+            manual.append(
+                Manual(f"PageSpeed Insights failed for {result.url}: {result.error}")
+            )
+        else:
+            ok.append(result)
+    return manual, ok
+
+
+def _perf01(ctx: AuditContext) -> Iterable[Outcome]:
+    manual, results = _perf_preamble(ctx)
+    yield from manual
+    for result in results:
         if result.score is None:
             continue
         if result.score < 50:
@@ -33,10 +54,9 @@ def _perf01(ctx: AuditContext) -> Iterable[Outcome]:
 
 
 def _perf02(ctx: AuditContext) -> Iterable[Outcome]:
-    if not ctx.crawl.pagespeed_results:
-        yield Manual("No PageSpeed Insights data available for this crawl")
-        return
-    for result in ctx.crawl.pagespeed_results:
+    manual, results = _perf_preamble(ctx)
+    yield from manual
+    for result in results:
         if result.lcp_ms is None:
             continue
         if result.lcp_ms > 4000:
@@ -54,10 +74,9 @@ def _perf02(ctx: AuditContext) -> Iterable[Outcome]:
 
 
 def _perf03(ctx: AuditContext) -> Iterable[Outcome]:
-    if not ctx.crawl.pagespeed_results:
-        yield Manual("No PageSpeed Insights data available for this crawl")
-        return
-    for result in ctx.crawl.pagespeed_results:
+    manual, results = _perf_preamble(ctx)
+    yield from manual
+    for result in results:
         if result.cls is None:
             continue
         if result.cls > 0.25:
@@ -75,10 +94,9 @@ def _perf03(ctx: AuditContext) -> Iterable[Outcome]:
 
 
 def _perf04(ctx: AuditContext) -> Iterable[Outcome]:
-    if not ctx.crawl.pagespeed_results:
-        yield Manual("No PageSpeed Insights data available for this crawl")
-        return
-    for result in ctx.crawl.pagespeed_results:
+    manual, results = _perf_preamble(ctx)
+    yield from manual
+    for result in results:
         if result.inp_ms is None:
             continue
         if result.inp_ms > 500:
@@ -96,10 +114,9 @@ def _perf04(ctx: AuditContext) -> Iterable[Outcome]:
 
 
 def _perf05(ctx: AuditContext) -> Iterable[Outcome]:
-    if not ctx.crawl.pagespeed_results:
-        yield Manual("No PageSpeed Insights data available for this crawl")
-        return
-    for result in ctx.crawl.pagespeed_results:
+    manual, results = _perf_preamble(ctx)
+    yield from manual
+    for result in results:
         if result.fcp_ms is None:
             continue
         if result.fcp_ms > 3000:
@@ -117,10 +134,9 @@ def _perf05(ctx: AuditContext) -> Iterable[Outcome]:
 
 
 def _perf06(ctx: AuditContext) -> Iterable[Outcome]:
-    if not ctx.crawl.pagespeed_results:
-        yield Manual("No PageSpeed Insights data available for this crawl")
-        return
-    for result in ctx.crawl.pagespeed_results:
+    manual, results = _perf_preamble(ctx)
+    yield from manual
+    for result in results:
         if result.tbt_ms is None:
             continue
         if result.tbt_ms > 600:
@@ -138,10 +154,9 @@ def _perf06(ctx: AuditContext) -> Iterable[Outcome]:
 
 
 def _perf07(ctx: AuditContext) -> Iterable[Outcome]:
-    if not ctx.crawl.pagespeed_results:
-        yield Manual("No PageSpeed Insights data available for this crawl")
-        return
-    for result in ctx.crawl.pagespeed_results:
+    manual, results = _perf_preamble(ctx)
+    yield from manual
+    for result in results:
         if result.ttfb_ms is None:
             continue
         if result.ttfb_ms > 1800:

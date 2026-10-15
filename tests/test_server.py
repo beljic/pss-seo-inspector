@@ -365,3 +365,27 @@ async def test_pagespeed_not_forced_when_out_of_scope(
     out = isolated_dirs / "reports" / "shop.test" / "2026-10-12"
     findings = json.loads((out / "findings.json").read_text())
     assert not any(f["rule_id"].startswith("PERF-") for f in findings)
+
+
+@pytest.mark.anyio
+async def test_pagespeed_all_failed_does_not_pass(
+    monkeypatch: pytest.MonkeyPatch, isolated_dirs: Path
+) -> None:
+    # Every PSI call returns 429 (the default _psi_transport). No metric is
+    # measured, so no PERF rule may be reported as passed; each must leave a
+    # manual note instead.
+    use_site(monkeypatch, shop_site())
+    result = await call("audit_site", {"url": "https://shop.test"})
+    assert result.is_error is False
+    data = result.structured_content
+
+    perf_ids = {f"PERF-0{i}" for i in range(1, 8)}
+    assert not any(rid in perf_ids for rid in data["passed"])
+
+    manual_by_rule = {m["rule_id"] for m in data["manual"]}
+    assert perf_ids <= manual_by_rule
+
+    out = isolated_dirs / "reports" / "shop.test" / "2026-10-12"
+    report = (out / "report.md").read_text()
+    passed_section = report.split("## Passed", 1)[1].split("##", 1)[0]
+    assert not any(rid in passed_section for rid in perf_ids)
