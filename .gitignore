@@ -1,0 +1,31 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+.env
+.idea/
+
+# Agent tooling and generated working artifacts — keep out of GitHub
+AGENTS.md
+.claude/
+.codex/
+.superpowers/
+_bmad/
+_bmad-output/
+.memlog.md
+docs/superpowers/
+
+reports/
+.agents/
+
+# Real per-site configs may contain private brand/business data — never publish.
+# Only the synthetic example is tracked.
+sites/*.json
+!sites/example.test.json

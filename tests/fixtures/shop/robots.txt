@@ -1,0 +1,20 @@
+# Shopify-like default robots.txt (fixture)
+User-agent: *
+Disallow: /admin
+Disallow: /cart
+Disallow: /orders
+Disallow: /checkouts/
+Disallow: /checkout
+Disallow: /carts
+Disallow: /account
+Disallow: /collections/*sort_by*
+Disallow: /collections/*+*
+Disallow: /blogs/*+*
+Disallow: /*?*oseid=*
+Disallow: /*preview_theme_id*
+Disallow: /*preview_script_id*
+Disallow: /policies/
+Disallow: /search
+Disallow: /recommendations/products
+Disallow: /private
+Sitemap: https://shop.test/sitemap.xml

@@ -1,0 +1,24 @@
+{
+  "brand": "Acme Optics",
+  "brand_wrong_spellings": ["Acme optics", "AcmeOptics"],
+  "product_name_pattern": "^[A-Za-z]+ Filter in Frame [0-9]+[A-Za-z]?$",
+  "noindex_urls": ["/pages/internal-tool"],
+  "known_issues": [
+    {
+      "description": "Recheck previously reported duplicate meta descriptions on product pages.",
+      "rule_ids": ["META-02"]
+    }
+  ],
+  "pagespeed_urls": [
+    "https://example.test/",
+    "https://example.test/collections/frames",
+    "https://example.test/products/sample-filter"
+  ],
+  "facts": [
+    {
+      "name": "return period",
+      "pattern": "(\\d+)\\s*days?\\s+from\\s+(delivery|purchase)",
+      "expected": "15 delivery"
+    }
+  ]
+}
