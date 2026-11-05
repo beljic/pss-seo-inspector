@@ -638,6 +638,35 @@ def test_idx17_training_bots_and_missing_llms_are_info() -> None:
     assert len(findings) == 2
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        "<!doctype html><html><body>Page not found</body></html>",
+        "  <html><head><title>Shop</title></head></html>",
+        "Just some text without any heading",
+        "",
+    ],
+)
+def test_idx17_llms_200_but_not_markdown_is_reported(body: str) -> None:
+    probes = [p for p in good_probes() if p.rule_id != "IDX-17"]
+    probes.append(
+        probe("IDX-17", "llms.txt", f"{ORIGIN}/llms.txt", kind="text", text=body)
+    )
+    findings = run_audit(good_crawl(probes=probes), None, ["IDX-17"]).findings
+    assert len(findings) == 1
+    assert findings[0].severity == Severity.info
+    assert "not a valid llms.txt" in findings[0].evidence
+
+
+@pytest.mark.parametrize("body", ["# Acme Optics\n\n> Frames", "Acme Optics\n===\n"])
+def test_idx17_markdown_llms_passes(body: str) -> None:
+    probes = [p for p in good_probes() if p.rule_id != "IDX-17"]
+    probes.append(
+        probe("IDX-17", "llms.txt", f"{ORIGIN}/llms.txt", kind="text", text=body)
+    )
+    assert run_audit(good_crawl(probes=probes), None, ["IDX-17"]).findings == []
+
+
 def test_idx03_shopify_collection_product_must_canonicalize_to_product() -> None:
     url = f"{ORIGIN}/collections/frames/products/aim"
     good = page(url, html(url=url, canonical=f"{ORIGIN}/products/aim"))

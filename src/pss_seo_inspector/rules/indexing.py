@@ -868,6 +868,24 @@ def _idx17(ctx: AuditContext) -> Iterable[Outcome]:
             "Google Search does not use it",
             Severity.info,
         )
+    elif llms is not None and llms.status == 200 and not _is_llms_markdown(llms.text):
+        yield Issue(
+            llms.url,
+            "/llms.txt returns 200 but is not a valid llms.txt (HTML or no "
+            f"Markdown heading): {snip(llms.text or '(empty body)')}",
+            Severity.info,
+        )
+
+
+_HTML_START = re.compile(r"\s*<(!doctype|html|head|body)\b", re.IGNORECASE)
+_MD_HEADING = re.compile(r"^(#{1,6}\s+\S|[=-]{3,}\s*$)", re.MULTILINE)
+
+
+def _is_llms_markdown(text: str | None) -> bool:
+    """llms.txt is Markdown: not an HTML page and at least one ATX/setext heading."""
+    if not text or _HTML_START.match(text):
+        return False
+    return bool(_MD_HEADING.search(text))
 
 
 RULES = [
