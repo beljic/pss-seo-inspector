@@ -48,6 +48,9 @@ def run_audit(
         if not rule.applies(crawl.platform):
             result.skipped.append(rule.id)
             continue
+        if crawl.source == "import" and not rule.runs_offline_on_import():
+            result.not_checked.append(rule.id)
+            continue
         if rule.scope == "page" and not has_html:
             findings: list[Finding] = []
             manual = [ManualCheck(rule_id=rule.id, description="No HTML pages crawled")]

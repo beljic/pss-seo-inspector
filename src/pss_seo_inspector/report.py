@@ -66,6 +66,19 @@ def _write_urls_csv(path: Path, crawl: Crawl) -> None:
             )
 
 
+def blocked_summary(crawl: Crawl) -> str | None:
+    """Rule-independent note when bot protection answered instead of the site."""
+    if not crawl.blocked_count:
+        return None
+    note = (
+        f"blocked by bot protection ({crawl.bot_protection}): "
+        f"{crawl.blocked_count} URL(s) answered with a challenge"
+    )
+    if crawl.bot_blocked:
+        note += "; crawl stopped, results are incomplete"
+    return note
+
+
 def summary_lines(crawl: Crawl, result: AuditResult) -> list[str]:
     """Executive summary, at most 10 lines."""
     counts = Counter(f.severity for f in result.findings)
@@ -86,6 +99,15 @@ def summary_lines(crawl: Crawl, result: AuditResult) -> list[str]:
         + ("; incomplete: repeated HTTP 429" if crawl.rate_limited else "")
         + f"; robots-skipped: {len(crawl.skipped_robots)}; link checks: "
         f"{len(crawl.link_checks)}",
+        *([f"- **{blocked}**"] if (blocked := blocked_summary(crawl)) else []),
+        *(
+            [
+                f"- **Imported pages only** (no requests sent): "
+                f"{len(result.not_checked)} rules not checked"
+            ]
+            if crawl.source == "import"
+            else []
+        ),
         f"- Findings: {len(result.findings)} ({sev})",
         f"- Critical/high rules: {', '.join(top) if top else 'none'}",
         f"- Rules passed: {len(result.passed)}; needs manual check: "
@@ -184,6 +206,13 @@ def render_markdown(crawl: Crawl, result: AuditResult) -> str:
     out += [
         f"- {rid} — {rules[rid].description}" for rid in result.skipped if rid in rules
     ] or ["None."]
+    if crawl.source == "import":
+        out += ["", "## Not checked (imported pages only)", ""]
+        out += [
+            f"- {rid} — {rules[rid].description}"
+            for rid in result.not_checked
+            if rid in rules
+        ] or ["None."]
     out += ["", "## Known issues re-verified", ""]
     out += [
         f"- {k.description} — **{k.status}**"

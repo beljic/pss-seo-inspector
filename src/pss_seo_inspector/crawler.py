@@ -92,12 +92,15 @@ class Crawler:
     async def run(self) -> Crawl:
         try:
             await self._crawl_pages()
-            if not self.fetcher.rate_limited and not self.quick:
+            if not self.fetcher.stopped and not self.quick:
                 await self._check_links()
-            if not self.fetcher.rate_limited:
+            if not self.fetcher.stopped:
                 await self._probe()
         finally:
             self.crawl.rate_limited = self.fetcher.rate_limited
+            self.crawl.bot_blocked = self.fetcher.bot_blocked
+            self.crawl.bot_protection = self.fetcher.bot_protection
+            self.crawl.blocked_count = self.fetcher.blocked_count
             await self.fetcher.aclose()
         return self.crawl
 
@@ -106,7 +109,7 @@ class Crawler:
     async def _crawl_pages(self) -> None:
         crawl = self.crawl
         start = await self._fetch_page(self.start_url, depth=0, source="start")
-        if self.fetcher.rate_limited:
+        if self.fetcher.stopped:
             return
         if start is not None:
             crawl.host = host_of(start.final_url) or crawl.host
@@ -128,7 +131,7 @@ class Crawler:
                     queued.add(url)
                     from_sitemap.append(url)
 
-        while (links or from_sitemap) and not self.fetcher.rate_limited:
+        while (links or from_sitemap) and not self.fetcher.stopped:
             if len(crawl.pages) >= self.max_pages:
                 crawl.capped = True
                 break
@@ -162,6 +165,7 @@ class Crawler:
         self._done.add(final)
         if (
             res.status == 200
+            and res.blocked_by is None
             and is_html(res.content_type)
             and result.body
             and first_time
@@ -200,7 +204,7 @@ class Crawler:
         declared = [s for s in parsed.sitemaps if s.startswith(("http://", "https://"))]
         queue = deque(declared or [f"{self.crawl.origin}/sitemap.xml"])
         seen: set[str] = set()
-        while queue and not self.fetcher.rate_limited:
+        while queue and not self.fetcher.stopped:
             url = queue.popleft()
             if url in seen:
                 continue
@@ -287,7 +291,7 @@ class Crawler:
         if len(todo) > self.link_check_limit:
             self.crawl.link_checks_capped = True
         for url in todo[: self.link_check_limit]:
-            if self.fetcher.rate_limited:
+            if self.fetcher.stopped:
                 break
             if not await self.fetcher.allowed(url):
                 self._skip(url)
@@ -308,7 +312,7 @@ class Crawler:
         )
         cache: dict[tuple[str, str, str], Probe] = {}
         for rule in self.rules:
-            if self.fetcher.rate_limited:
+            if self.fetcher.stopped:
                 break
             if rule.probes is None or not rule.applies(self.crawl.platform):
                 continue
@@ -322,7 +326,7 @@ class Crawler:
                 )
                 continue
             for spec in specs:
-                if self.fetcher.rate_limited:
+                if self.fetcher.stopped:
                     break
                 key = (normalize(spec.url), spec.kind, spec.method)
                 cached = cache.get(key)
@@ -348,6 +352,8 @@ class Crawler:
         probe = Probe(**res.model_dump(), rule_id=rule_id, key=spec.key, kind=spec.kind)
         if res.robots_blocked:
             self._skip(normalize(res.final_url))
+        if res.blocked_by is not None:
+            return probe  # never keep challenge HTML as the probed resource
         if spec.kind == "image" and result.body:
             size = image_size(result.body)
             if size is not None:

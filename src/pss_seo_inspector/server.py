@@ -15,10 +15,11 @@ from pydantic import Field
 from .crawler import DEFAULT_MAX_PAGES, crawl_site, ensure_url
 from .engine import UnknownRuleError, run_audit, select_rules
 from .fetcher import DEFAULT_RATE, Clock
+from .importer import MAX_FILES, ImportPagesError, import_pages
 from .models import Crawl, Severity
 from .pagespeed import run_pagespeed
 from .platform import GENERIC, PLATFORMS
-from .report import summary_lines, write_reports
+from .report import blocked_summary, summary_lines, write_reports
 from .rules.base import ALL, all_rules
 from .site_config import SiteConfig, SiteConfigError, load_site_config
 from .storage import (
@@ -48,6 +49,7 @@ class ReadOnlyMCPServer(MCPServer):
             {"url", "crawl_id", "rules", "site_config", "max_pages", "rate"}
         ),
         "audit_url": frozenset({"url", "rules"}),
+        "import_pages": frozenset({"site_url", "paths", "urls"}),
         "list_rules": frozenset({"platform"}),
         "get_findings": frozenset({"crawl_id", "rule_id", "severity"}),
     }
@@ -161,6 +163,9 @@ async def _crawl_site(
         "platform": crawl.platform,
         "capped": crawl.capped,
         "rate_limited": crawl.rate_limited,
+        "bot_blocked": crawl.bot_blocked,
+        "blocked_count": crawl.blocked_count,
+        "blocked": blocked_summary(crawl),
         "skipped_robots": len(crawl.skipped_robots),
         "sitemap_only_count": len(sitemap_only),
         "sitemap_only": sitemap_only[:MAX_DIFF_LIST],
@@ -174,7 +179,11 @@ async def _audit_site(
     ctx: Context,
     url: Annotated[str | None, Field(description="Crawl this URL first")] = None,
     crawl_id: Annotated[
-        str | None, Field(description="Re-audit a saved crawl: <domain>/<YYYY-MM-DD>")
+        str | None,
+        Field(
+            description="Re-audit a saved crawl: <domain>/<YYYY-MM-DD>, or "
+            "<domain>/<YYYY-MM-DD>-import from import_pages"
+        ),
     ] = None,
     rules: Annotated[list[str] | None, Field(description="Only these rule ids")] = None,
     site_config: Annotated[
@@ -205,7 +214,8 @@ async def _audit_site(
     # Fetch PageSpeed Insights before auditing so PERF rules see the data in a
     # single pass; this avoids stale "no data" notes and respects the requested
     # rule scope. PSI failures never crash the audit (run_pagespeed is lenient).
-    psi_urls = _pagespeed_urls(crawl, config)
+    # Imported pages: no requests at all, so PageSpeed is "not checked".
+    psi_urls = [] if crawl.source == "import" else _pagespeed_urls(crawl, config)
     api_key = os.environ.get("PSS_PAGESPEED_API_KEY")
     crawl.pagespeed_results = await run_pagespeed(
         psi_urls, api_key=api_key, transport=psi_transport
@@ -216,11 +226,13 @@ async def _audit_site(
         "crawl_id": crawl.crawl_id,
         "platform": crawl.platform,
         "summary": "\n".join(summary_lines(crawl, result)),
+        "blocked": blocked_summary(crawl),
         "report_path": str(report),
         "finding_count": len(result.findings),
         "passed": result.passed,
         "manual": [m.model_dump(mode="json") for m in result.manual],
         "skipped": result.skipped,
+        "not_checked": result.not_checked,
         "pagespeed_urls_checked": len(psi_urls),
     }
 
@@ -256,11 +268,48 @@ async def _audit_url(
     return {
         "url": start,
         "status": page.status if page else None,
+        "blocked": blocked_summary(crawl),
         "platform": crawl.platform,
         "findings": [f.model_dump(mode="json") for f in result.findings],
         "passed": result.passed,
         "manual": [m.model_dump(mode="json") for m in result.manual],
         "skipped": result.skipped,
+    }
+
+
+async def _import_pages(
+    site_url: Annotated[
+        str, Field(min_length=1, description="The site the pages belong to")
+    ],
+    paths: Annotated[
+        list[str],
+        Field(
+            min_length=1,
+            max_length=MAX_FILES,
+            description="Local files saved from the user's browser: .html "
+            "(Save Page As, HTML only) and/or .har (DevTools export)",
+        ),
+    ],
+    urls: Annotated[
+        dict[str, str] | None,
+        Field(description="{file: url} for saved .html files without a canonical"),
+    ] = None,
+) -> dict[str, Any]:
+    """Import saved pages (no network) and save them as <domain>/<date>-import."""
+    try:
+        crawl, skipped = import_pages(site_url, paths, urls=urls, today=today)
+        crawl_dir(crawl.crawl_id)
+    except (ImportPagesError, UnknownCrawlError) as exc:
+        raise ToolError(str(exc)) from None
+    save_crawl(crawl)
+    return {
+        "crawl_id": crawl.crawl_id,
+        "page_count": len(crawl.pages),
+        "platform": crawl.platform,
+        "skipped": skipped,
+        "blocked": blocked_summary(crawl),
+        "crawl_path": str(crawl_dir(crawl.crawl_id) / "crawl.json"),
+        "next": f"audit_site(crawl_id='{crawl.crawl_id}')",
     }
 
 
@@ -320,6 +369,7 @@ for _function, _name in (
     (_crawl_site, "crawl_site"),
     (_audit_site, "audit_site"),
     (_audit_url, "audit_url"),
+    (_import_pages, "import_pages"),
     (_list_rules, "list_rules"),
     (_get_findings, "get_findings"),
 ):

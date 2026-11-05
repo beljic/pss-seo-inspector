@@ -353,6 +353,9 @@ def _idx05(ctx: AuditContext) -> Iterable[Outcome]:
                 f"{target}: {res.error}; destination not requested: {res.final_url}"
             )
             continue
+        if res.blocked_by:
+            yield Manual(f"{target}: not checked, blocked by {res.blocked_by}")
+            continue
         problem = _link_problem(res)
         if problem:
             yield Issue(
@@ -1127,6 +1130,7 @@ RULES = [
         "chained; HTML and Link-header canonicals agree",
         check=_idx14,
         scope="page",
+        needs_live=True,
         fix={
             "generic": "Point canonicals directly at the final, indexable 200 URL.",
             "shopify": "Check apps or theme code that override canonical_url; "

@@ -14,6 +14,7 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 
 import httpx2
 
+from .botwall import challenge_reason
 from .models import Hop, Resource, RobotsFile
 from .robots import RobotsTxt, from_status
 from .urlutil import absolutize, origin_of
@@ -28,6 +29,7 @@ ROBOTS_MAX_BYTES = 1024 * 1024
 IMAGE_RANGE_BYTES = 64 * 1024
 RATE_LIMIT_BACKOFF_SECONDS = 5.0
 MAX_RETRY_AFTER_SECONDS = 3600.0
+MAX_CONSECUTIVE_BLOCKED = 3
 
 Method = Literal["GET", "HEAD"]
 
@@ -223,10 +225,18 @@ class Fetcher:
         transport: httpx2.AsyncBaseTransport | None = None,
         clock: Clock | None = None,
         timeout: float = TIMEOUT_SECONDS,
+        max_blocked: int = MAX_CONSECUTIVE_BLOCKED,
     ) -> None:
+        if max_blocked < 1:
+            raise ValueError("max_blocked must be >= 1")
         self.clock = clock or SystemClock()
         self.limiter = RateLimiter(rate, self.clock)
         self.rate_limited = False
+        self.max_blocked = max_blocked
+        self.bot_blocked = False
+        self.bot_protection: str | None = None
+        self.blocked_count = 0
+        self._consecutive_blocked = 0
         self.client = httpx2.AsyncClient(
             transport=transport,
             headers={"User-Agent": USER_AGENT},
@@ -234,6 +244,23 @@ class Fetcher:
             follow_redirects=False,
         )
         self._robots: dict[str, tuple[RobotsFile, RobotsTxt]] = {}
+
+    @property
+    def stopped(self) -> bool:
+        """The site asked us to stop: repeated 429s or bot-protection challenges."""
+        return self.rate_limited or self.bot_blocked
+
+    def _note_challenge(self, res: Resource, body: bytes) -> None:
+        reason = challenge_reason(res.status, res.headers, body)
+        if reason is None:
+            self._consecutive_blocked = 0
+            return
+        res.blocked_by = reason
+        self.blocked_count += 1
+        self.bot_protection = self.bot_protection or reason
+        self._consecutive_blocked += 1
+        if self._consecutive_blocked >= self.max_blocked:
+            self.bot_blocked = True
 
     async def aclose(self) -> None:
         await self.client.aclose()
@@ -315,6 +342,12 @@ class Fetcher:
             res.status = 429
             res.error = "crawl stopped after repeated HTTP 429 responses"
             return FetchResult(resource=res)
+        if self.bot_blocked:
+            res.error = (
+                f"crawl stopped after {self.max_blocked} consecutive "
+                f"bot-protection challenges ({self.bot_protection})"
+            )
+            return FetchResult(resource=res)
         current = url
         seen: set[str] = set()
         headers = {"Range": f"bytes=0-{range_bytes - 1}"} if range_bytes else {}
@@ -381,6 +414,7 @@ class Fetcher:
                         body, truncated = await _read_capped(response, max_body)
                         res.truncated = truncated
                     res.size_bytes = len(body)
+                    self._note_challenge(res, body)
                     break
             except httpx2.TimeoutException:
                 res.error = "timeout"

@@ -389,3 +389,37 @@ async def test_pagespeed_all_failed_does_not_pass(
     report = (out / "report.md").read_text()
     passed_section = report.split("## Passed", 1)[1].split("##", 1)[0]
     assert not any(rid in passed_section for rid in perf_ids)
+
+
+@pytest.mark.anyio
+async def test_tools_report_bot_protection_instead_of_auditing_the_challenge(
+    monkeypatch: pytest.MonkeyPatch, isolated_dirs: Path
+) -> None:
+    from sitekit import fixture_text
+
+    challenge = fixture_text("challenge", "cloudflare.html").encode()
+
+    def _wall(request: httpx2.Request) -> httpx2.Response:
+        assert request.method in ("GET", "HEAD")
+        return httpx2.Response(
+            503, headers={"content-type": "text/html"}, content=challenge
+        )
+
+    use_site(monkeypatch, FakeSite())
+    monkeypatch.setattr(server, "transport", httpx2.MockTransport(_wall))
+    expected = "blocked by bot protection (Cloudflare challenge)"
+
+    crawled = await call("crawl_site", {"url": "https://wall.test"})
+    data = crawled.structured_content
+    assert data["bot_blocked"] is True
+    assert data["blocked_count"] == 3
+    assert expected in data["blocked"]
+
+    audited = await call("audit_site", {"crawl_id": data["crawl_id"]})
+    assert expected in audited.structured_content["summary"]
+    report = isolated_dirs / "reports" / "wall.test" / "2026-10-12" / "report.md"
+    assert expected in report.read_text()
+
+    single = await call("audit_url", {"url": "https://wall.test"})
+    assert expected in single.structured_content["blocked"]
+    assert single.structured_content["findings"] == []

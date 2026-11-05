@@ -11,7 +11,7 @@ from .models import Crawl, Finding
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPORT_FILES = ("findings.json", "report.md", "urls.csv")
-CRAWL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*/\d{4}-\d{2}-\d{2}$")
+CRAWL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*/\d{4}-\d{2}-\d{2}(-import)?$")
 
 
 class UnknownCrawlError(Exception):
@@ -33,7 +33,7 @@ def sites_dir() -> Path:
 def crawl_dir(crawl_id: str) -> Path:
     if not CRAWL_ID_RE.match(crawl_id):
         raise UnknownCrawlError(
-            f"Unknown crawl_id '{crawl_id}' (expected '<domain>/<YYYY-MM-DD>')"
+            f"Unknown crawl_id '{crawl_id}' (expected '<domain>/<YYYY-MM-DD>[-import]')"
         )
     return reports_dir() / crawl_id
 

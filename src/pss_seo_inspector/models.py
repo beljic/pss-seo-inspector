@@ -123,6 +123,7 @@ class Resource(BaseModel):
     content_type: str = ""
     error: str | None = None
     robots_blocked: bool = False
+    blocked_by: str | None = None  # bot-protection challenge, e.g. Cloudflare
     size_bytes: int = 0
     truncated: bool = False
 
@@ -181,6 +182,10 @@ class Crawl(BaseModel):
     sitemaps_capped: bool = False
     link_checks_capped: bool = False
     rate_limited: bool = False
+    bot_blocked: bool = False  # stopped after consecutive challenges
+    bot_protection: str | None = None
+    blocked_count: int = 0
+    source: Literal["crawl", "import"] = "crawl"  # import: saved browser pages
     probe_errors: list[str] = Field(default_factory=list)
     platform: str = "generic"
     platform_evidence: list[str] = Field(default_factory=list)
@@ -222,4 +227,5 @@ class AuditResult(BaseModel):
     passed: list[str] = Field(default_factory=list)
     manual: list[ManualCheck] = Field(default_factory=list)
     skipped: list[str] = Field(default_factory=list)
+    not_checked: list[str] = Field(default_factory=list)  # live data needed
     known_issues: list[KnownIssueResult] = Field(default_factory=list)

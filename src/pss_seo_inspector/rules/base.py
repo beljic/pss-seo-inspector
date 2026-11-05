@@ -127,11 +127,16 @@ class AuditContext(_BaseContext):
         return RobotsView(self.crawl)
 
     def probes(self, rule_id: str) -> list[Probe]:
-        return [p for p in self.crawl.probes if p.rule_id == rule_id]
+        """Probes of ``rule_id``; bot-protection challenges count as not run."""
+        return [
+            p
+            for p in self.crawl.probes
+            if p.rule_id == rule_id and p.blocked_by is None
+        ]
 
     def probe(self, rule_id: str, key: str) -> Probe | None:
-        for p in self.crawl.probes:
-            if p.rule_id == rule_id and p.key == key:
+        for p in self.probes(rule_id):
+            if p.key == key:
                 return p
         return None
 
@@ -271,10 +276,16 @@ class Rule:
     scope: Scope = "site"
     probes: Callable[[ProbeContext], Iterable[ProbeSpec]] | None = None
     manual: str | None = None
+    # Reads URLs beyond the page itself (status of link/canonical targets), so it
+    # cannot run on imported pages. Site-scope and probe rules are live anyway.
+    needs_live: bool = False
 
     def __post_init__(self) -> None:
         if "generic" not in self.fix:
             raise ValueError(f"Rule {self.id} needs a 'generic' fix text")
+
+    def runs_offline_on_import(self) -> bool:
+        return self.scope == "page" and self.probes is None and not self.needs_live
 
     def applies(self, platform: str) -> bool:
         return ALL in self.applies_to or platform in self.applies_to
