@@ -31,6 +31,7 @@ from pss_seo_inspector.fetcher import decode
 from pss_seo_inspector.models import Hop
 from pss_seo_inspector.parse import parse_html
 from pss_seo_inspector.platform import detect
+from pss_seo_inspector.report import summary_lines
 from pss_seo_inspector.robots import from_status, parse_robots
 from pss_seo_inspector.rules.base import ProbeSpec, Rule
 from pss_seo_inspector.urlutil import absolutize, normalize
@@ -130,6 +131,37 @@ async def test_crawl_delay_is_honoured() -> None:
     await crawler.run()
     assert len(site.requests) == 3
     assert clock.now >= 0.5 + 3.0  # robots→page at 1/rate, then page→page at delay
+
+
+@pytest.mark.anyio
+async def test_crawl_delay_is_announced_and_reported() -> None:
+    site = FakeSite()
+    site.add(
+        "https://slow.test/robots.txt",
+        "User-agent: *\nCrawl-delay: 10\n",
+        content_type="text/plain",
+    )
+    site.add("https://slow.test/", html(url="https://slow.test/"))
+    messages: list[str | None] = []
+
+    async def progress(done: float, total: float | None, msg: str | None) -> None:
+        messages.append(msg)
+
+    crawl = await Crawler(
+        "https://slow.test/",
+        transport=site.transport(),
+        clock=FakeClock(),
+        today=TODAY,
+        rules=[],
+        max_pages=6,
+        link_check_limit=0,
+        progress=progress,
+    ).run()
+    assert crawl.crawl_delay == 10
+    assert "robots.txt Crawl-delay 10s: up to ~1 min of waiting" in messages
+    result = run_audit(crawl, None, [])
+    lines = summary_lines(crawl, result)
+    assert any("robots.txt Crawl-delay: 10s" in line for line in lines)
 
 
 # -- IDX-11 / IDX-12 ---------------------------------------------------------

@@ -203,6 +203,7 @@ class Crawl(BaseModel):
     sitemaps_capped: bool = False
     link_checks_capped: bool = False
     rate_limited: bool = False
+    crawl_delay: float = 0.0  # robots.txt Crawl-delay honoured for our group
     bot_blocked: bool = False  # stopped after consecutive challenges
     bot_protection: str | None = None
     blocked_count: int = 0

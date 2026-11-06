@@ -361,6 +361,10 @@ class Fetcher:
                 break
             if respect_robots and not await self.allowed(current):
                 res.robots_blocked = True
+                robots_file = self._robots[origin_of(current)][0]
+                if robots_file.status is None and robots_file.error:
+                    # unreachable robots.txt = disallow all, but say why
+                    res.error = f"could not connect: {robots_file.error}"
                 break
             seen.add(current)
             await self.limiter.wait(self._crawl_delay(current))

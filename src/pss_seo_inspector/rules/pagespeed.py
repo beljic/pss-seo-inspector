@@ -4,33 +4,40 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from ..models import Severity
+from ..models import Crawl, Severity
 from ..pagespeed import PageSpeedResult
-from .base import AuditContext, Issue, Manual, Outcome, Rule
+from ..urlutil import is_public_host
+from .base import AuditContext, Issue, Outcome, Rule
+
+
+def psi_notes(crawl: Crawl) -> list[str]:
+    """Manual notes about PageSpeed Insights, emitted once per audit by the engine.
+
+    No data: one note (Google cannot reach a non-public host, or no data at all).
+    Failed fetches: one note per URL, not one per PERF rule.
+    """
+    if not crawl.pagespeed_results:
+        if not is_public_host(crawl.host):
+            return [
+                f"PageSpeed Insights not run: Google cannot reach the non-public "
+                f"host {crawl.host}; run Lighthouse locally instead"
+            ]
+        return ["No PageSpeed Insights data available for this crawl"]
+    return [
+        f"PageSpeed Insights failed for {r.url}: {r.error}"
+        for r in crawl.pagespeed_results
+        if r.error is not None
+    ]
 
 
 def _perf_preamble(ctx: AuditContext) -> tuple[list[Outcome], list[PageSpeedResult]]:
-    """Shared PERF-rule prologue.
+    """Shared PERF-rule prologue: the measurable results to evaluate.
 
-    Returns the manual notes a PERF rule must always emit and the measurable
-    results it should evaluate. If no PSI data was collected at all, the single
-    "no data" manual note is returned. Otherwise every result whose fetch failed
-    becomes a manual note that names the URL and the (already scrubbed) error, so
-    an all-failed run never counts as a pass; the successful results are returned
-    for the caller to turn into Issues.
+    Missing or failed PSI data is reported once by the engine (``psi_notes``),
+    which also marks PERF rules "not checked" when no URL was measured, so an
+    all-failed run never counts as a pass.
     """
-    if not ctx.crawl.pagespeed_results:
-        return [Manual("No PageSpeed Insights data available for this crawl")], []
-    manual: list[Outcome] = []
-    ok: list[PageSpeedResult] = []
-    for result in ctx.crawl.pagespeed_results:
-        if result.error is not None:
-            manual.append(
-                Manual(f"PageSpeed Insights failed for {result.url}: {result.error}")
-            )
-        else:
-            ok.append(result)
-    return manual, ok
+    return [], [r for r in ctx.crawl.pagespeed_results if r.error is None]
 
 
 def _perf01(ctx: AuditContext) -> Iterable[Outcome]:

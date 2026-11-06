@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import math
 import uuid
 import xml.etree.ElementTree as ET
 import zlib
@@ -15,6 +16,7 @@ import httpx2
 
 from .fetcher import (
     IMAGE_RANGE_BYTES,
+    ROBOTS_TOKEN,
     USER_AGENT,
     Clock,
     Fetcher,
@@ -114,8 +116,18 @@ class Crawler:
         if start is not None:
             crawl.host = host_of(start.final_url) or crawl.host
             crawl.origin = origin_of(start.final_url)
-        robots_file, _ = await self.fetcher.robots(crawl.origin)
+        robots_file, parsed = await self.fetcher.robots(crawl.origin)
         crawl.robots = robots_file
+        crawl.crawl_delay = parsed.crawl_delay(ROBOTS_TOKEN)
+        if crawl.crawl_delay and self.progress is not None:
+            budget = self.max_pages + (0 if self.quick else self.link_check_limit)
+            minutes = math.ceil(budget * crawl.crawl_delay / 60)
+            await self.progress(
+                len(crawl.pages),
+                self.max_pages,
+                f"robots.txt Crawl-delay {crawl.crawl_delay:g}s: "
+                f"up to ~{minutes} min of waiting",
+            )
         if not self.quick:
             await self._load_sitemaps()
 

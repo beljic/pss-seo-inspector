@@ -225,6 +225,7 @@ def _meta05_probes(ctx: ProbeContext) -> Iterable[ProbeSpec]:
 
 def _meta05(ctx: AuditContext) -> Iterable[Outcome]:
     unprobed: set[str] = set()
+    unreadable: dict[str, list[str]] = {}  # image -> pages using it
     for page in ctx.canonical_pages():
         assert page.html is not None
         og = page.html.og
@@ -245,7 +246,8 @@ def _meta05(ctx: AuditContext) -> Iterable[Outcome]:
             unprobed.add(image)
             continue
         if probe.robots_blocked:
-            yield Manual(f"og:image {image} is blocked by robots.txt for this crawler")
+            reason = probe.error or "blocked by robots.txt for this crawler"
+            yield Manual(f"og:image {image}: {reason}")
             continue
         if probe.error or probe.status not in (200, 206):
             yield Issue(
@@ -256,7 +258,7 @@ def _meta05(ctx: AuditContext) -> Iterable[Outcome]:
         declared = og.get("og:image:width", "")
         width = int(declared) if declared.isdigit() else probe.image_width
         if width is None:
-            yield Manual(f"Could not read the width of og:image {image}")
+            unreadable.setdefault(image, []).append(page.final_url)
         elif width < OG_IMAGE_MIN_WIDTH:
             source = "og:image:width" if declared.isdigit() else "image header"
             yield Issue(
@@ -264,6 +266,14 @@ def _meta05(ctx: AuditContext) -> Iterable[Outcome]:
                 f"og:image is {width}px wide ({source}); "
                 f"needs ≥{OG_IMAGE_MIN_WIDTH}px: {image}",
             )
+    for image, pages in unreadable.items():
+        probe = ctx.probe("META-05", image)
+        kind = probe.content_type if probe and probe.content_type else "unknown"
+        yield Manual(
+            f"Could not read the width of og:image {image} on {len(pages)} page(s): "
+            f"image format not recognised (Content-Type {kind}; the bytes may be "
+            "another format)"
+        )
     if unprobed:
         yield Manual(f"{len(unprobed)} og:image(s) not probed (limit)")
 

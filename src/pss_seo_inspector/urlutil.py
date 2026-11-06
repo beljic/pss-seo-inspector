@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from urllib.parse import parse_qsl, urljoin, urlsplit, urlunsplit
 
 from .models import EVIDENCE_SNIPPET_MAX
@@ -81,3 +82,14 @@ def snip(text: str, limit: int = EVIDENCE_SNIPPET_MAX) -> str:
     """Collapse whitespace and cap at ``limit`` characters."""
     flat = " ".join(text.split())
     return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
+def is_public_host(host: str) -> bool:
+    """False for hosts Google cannot reach: localhost, .local, private/loopback IPs."""
+    name = host.lower().strip("[]").rstrip(".")
+    if name == "localhost" or name.endswith((".localhost", ".local")):
+        return False
+    try:
+        return ipaddress.ip_address(name).is_global
+    except ValueError:
+        return True

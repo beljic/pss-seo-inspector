@@ -13,6 +13,7 @@ from .models import (
     ManualCheck,
 )
 from .rules.base import AuditContext, Issue, Rule, Scope, all_rules
+from .rules.pagespeed import psi_notes
 from .site_config import SiteConfig
 from .urlutil import normalize, snip
 
@@ -42,6 +43,8 @@ def run_audit(
     ctx = AuditContext(crawl=crawl, site_config=site_config)
     result = AuditResult(crawl_id=crawl.crawl_id, platform=crawl.platform)
     has_html = bool(ctx.html_pages())
+    psi_ok = any(r.error is None for r in crawl.pagespeed_results)
+    psi_noted = False
     for rule in select_rules(rule_ids):
         if scope is not None and rule.scope != scope:
             continue
@@ -51,6 +54,16 @@ def run_audit(
         if crawl.source == "import" and not rule.runs_offline_on_import():
             result.not_checked.append(rule.id)
             continue
+        if rule.category == "performance":
+            if not psi_noted:  # PSI notes once per audit, not once per PERF rule
+                psi_noted = True
+                result.manual += [
+                    ManualCheck(rule_id=rule.id, description=note)
+                    for note in psi_notes(crawl)
+                ]
+            if not psi_ok:
+                result.not_checked.append(rule.id)
+                continue
         if rule.scope == "page" and not has_html:
             findings: list[Finding] = []
             manual = [ManualCheck(rule_id=rule.id, description="No HTML pages crawled")]

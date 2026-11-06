@@ -97,6 +97,11 @@ def summary_lines(crawl: Crawl, result: AuditResult) -> list[str]:
         f"- Pages fetched: {len(crawl.pages)} ({html_pages} HTML)"
         + (f", capped at max_pages={crawl.max_pages}" if crawl.capped else "")
         + ("; incomplete: repeated HTTP 429" if crawl.rate_limited else "")
+        + (
+            f"; robots.txt Crawl-delay: {crawl.crawl_delay:g}s (honoured)"
+            if crawl.crawl_delay
+            else ""
+        )
         + f"; robots-skipped: {len(crawl.skipped_robots)}; link checks: "
         f"{len(crawl.link_checks)}",
         *([f"- **{blocked}**"] if (blocked := blocked_summary(crawl)) else []),
@@ -213,6 +218,13 @@ def render_markdown(crawl: Crawl, result: AuditResult) -> str:
             for rid in result.not_checked
             if rid in rules
         ] or ["None."]
+    elif result.not_checked:
+        out += ["", "## Not checked (no PageSpeed Insights data)", ""]
+        out += [
+            f"- {rid} — {rules[rid].description}"
+            for rid in result.not_checked
+            if rid in rules
+        ]
     out += ["", "## Known issues re-verified", ""]
     out += [
         f"- {k.description} — **{k.status}**"

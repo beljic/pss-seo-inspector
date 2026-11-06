@@ -1,4 +1,4 @@
-"""Read image dimensions from the first bytes of PNG, GIF, JPEG and WebP files."""
+"""Read image dimensions from the first bytes of PNG, GIF, JPEG, WebP and AVIF."""
 
 from __future__ import annotations
 
@@ -16,7 +16,18 @@ def image_size(data: bytes) -> tuple[int, int] | None:
         return _jpeg(data)
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return _webp(data)
+    if data[4:8] == b"ftyp" and data[8:12] in (b"avif", b"avis"):
+        return _avif(data)
     return None
+
+
+def _avif(data: bytes) -> tuple[int, int] | None:
+    # ISOBMFF: the primary item's 'ispe' box (meta/iprp/ipco) holds width/height
+    i = data.find(b"ispe")
+    if i < 4 or i + 16 > len(data):
+        return None
+    width, height = struct.unpack(">II", data[i + 8 : i + 16])
+    return int(width), int(height)
 
 
 def _jpeg(data: bytes) -> tuple[int, int] | None:

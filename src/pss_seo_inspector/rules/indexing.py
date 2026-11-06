@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from ..models import Resource, Severity
+from ..models import Probe, Resource, Severity
 from ..urlutil import (
     host_of,
     normalize,
@@ -497,6 +497,12 @@ def _idx08(ctx: AuditContext) -> Iterable[Outcome]:
 # -- IDX-09 ------------------------------------------------------------------
 
 
+def _blocked_note(probe: Probe) -> str:
+    if probe.error:  # robots.txt itself unreachable (DNS / connection error)
+        return f"{probe.url}: {probe.error}"
+    return f"{probe.url}: blocked by robots.txt for this crawler"
+
+
 def _idx09_probes(ctx: ProbeContext) -> Iterable[ProbeSpec]:
     host = ctx.crawl.host
     bare = host[4:] if host.startswith("www.") else host
@@ -511,11 +517,11 @@ def _idx09_probes(ctx: ProbeContext) -> Iterable[ProbeSpec]:
 def _idx09(ctx: AuditContext) -> Iterable[Outcome]:
     canonical = normalize(ctx.origin + "/")
     for probe in ctx.probes("IDX-09"):
+        if probe.robots_blocked:
+            yield Manual(_blocked_note(probe))
+            continue
         if probe.error and not probe.chain:
             continue  # host does not resolve / no listener: nothing to index
-        if probe.robots_blocked:
-            yield Manual(f"{probe.url}: blocked by robots.txt for this crawler")
-            continue
         evidence = status_evidence(probe)
         if not probe.redirected:
             yield Issue(probe.url, f"Variant host does not redirect: {evidence}")
@@ -550,7 +556,7 @@ def _idx10_probes(ctx: ProbeContext) -> Iterable[ProbeSpec]:
 def _idx10(ctx: AuditContext) -> Iterable[Outcome]:
     for probe in ctx.probes("IDX-10"):
         if probe.robots_blocked:
-            yield Manual(f"{probe.url}: blocked by robots.txt for this crawler")
+            yield Manual(_blocked_note(probe))
         elif probe.error or probe.status != 200:
             yield Issue(
                 probe.key,

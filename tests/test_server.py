@@ -372,8 +372,8 @@ async def test_pagespeed_all_failed_does_not_pass(
     monkeypatch: pytest.MonkeyPatch, isolated_dirs: Path
 ) -> None:
     # Every PSI call returns 429 (the default _psi_transport). No metric is
-    # measured, so no PERF rule may be reported as passed; each must leave a
-    # manual note instead.
+    # measured, so no PERF rule may be reported as passed; they are "not
+    # checked" and each failed URL leaves one manual note (not one per rule).
     use_site(monkeypatch, shop_site())
     result = await call("audit_site", {"url": "https://shop.test"})
     assert result.is_error is False
@@ -382,8 +382,9 @@ async def test_pagespeed_all_failed_does_not_pass(
     perf_ids = {f"PERF-0{i}" for i in range(1, 8)}
     assert not any(rid in perf_ids for rid in data["passed"])
 
-    manual_by_rule = {m["rule_id"] for m in data["manual"]}
-    assert perf_ids <= manual_by_rule
+    assert perf_ids <= set(data["not_checked"])
+    psi_notes = [m for m in data["manual"] if "PageSpeed" in m["description"]]
+    assert len(psi_notes) == data["pagespeed_urls_checked"]
 
     out = isolated_dirs / "reports" / "shop.test" / "2026-10-12"
     report = (out / "report.md").read_text()
