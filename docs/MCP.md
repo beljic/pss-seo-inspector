@@ -1,21 +1,59 @@
 # MCP setup
 
-pss-seo-inspector exposes five typed MCP tools over stdio. Every tool takes
-typed arguments; none of them accepts a shell command, a raw request method, or
-an arbitrary file path. Unknown arguments are rejected before any request is
-made. All examples below are synthetic (`example.test`).
+pss-seo-inspector exposes six typed MCP tools over stdio. Every tool takes
+typed arguments; none of them accepts a shell command or a raw request method.
+The only file paths a tool reads are a site config (`audit_site`) and the
+saved pages you list in `import_pages`. Unknown arguments are rejected before
+any request is made. All examples below are synthetic (`example.test`).
 
 | Tool | Arguments | What it returns |
 |---|---|---|
-| `crawl_site` | `url`, `max_pages?` (200), `rate?` (2.0) | `crawl_id` (`<domain>/<YYYY-MM-DD>`), URL count, platform, sitemap-only and crawl-only URL lists; saves `crawl.json` |
+| `crawl_site` | `url`, `max_pages?` (200), `rate?` (2.0) | `crawl_id` (`<domain>/<YYYY-MM-DD>`), URL count, platform, sitemap-only and crawl-only URL lists, bot-protection block count; saves `crawl.json` |
 | `audit_site` | `url` **or** `crawl_id`, `rules?`, `site_config?`, `max_pages?`, `rate?` | Runs the rules (offline when given a `crawl_id`), runs PageSpeed Insights, writes the reports, returns the summary and `report_path` |
 | `audit_url` | `url`, `rules?` | Quick single-page check with page-scope rules; writes nothing |
+| `import_pages` | `site_url`, `paths` (≤200 `.html`/`.har` files), `urls?` (`{file: url}`) | Builds a crawl from pages saved in your own browser, with no network calls; saves it as `<domain>/<YYYY-MM-DD>-import` for `audit_site(crawl_id=...)` |
 | `list_rules` | `platform?` | Rule ids, descriptions, severities, scopes, platforms |
 | `get_findings` | `crawl_id`, `rule_id?`, `severity?` | Filtered findings from `findings.json` |
 
 `audit_site` requires exactly one of `url` or `crawl_id`. With a `url` it
 crawls first; with a `crawl_id` it re-audits a saved crawl without touching the
-network for the crawl (PageSpeed Insights still calls Google's API).
+network for the crawl (PageSpeed Insights still calls Google's API, except
+for an imported crawl).
+
+## Importing saved pages
+
+For a site the crawler cannot reach, for example one behind bot protection
+(see the README section "Sites behind bot protection"), save the pages in your
+own browser and import them. `import_pages` sends no request at all.
+
+Save single pages in Chrome with **Save page as** and the file type
+**Webpage, HTML Only**. The page URL is taken from the `urls` argument
+(`{"/path/to/file.html": "https://example.test/page"}`) if given, else from
+the page's `<link rel="canonical">`, else from `og:url`. A file without any of
+these is skipped with a note. A saved `.html` file has no HTTP headers, so
+header-based checks (for example `X-Robots-Tag`) see none.
+
+Or record a HAR in Chrome DevTools:
+
+1. Open DevTools, select the **Network** panel, check **Preserve log** (keeps
+   requests across page loads).
+2. Browse the pages you want audited.
+3. Click **Export HAR (sanitized)...** in the action bar of the Network panel.
+   The sanitized export leaves out `Cookie`, `Set-Cookie` and `Authorization`
+   headers.
+
+From a HAR only `GET` HTML document responses with status 200 on the site's
+host are imported, with their headers and final URL. An entry whose body is
+not in the file is skipped with a note. Challenge pages are skipped and
+counted as blocked.
+
+Limits: at most 200 files, 20 MB per file, `.html`, `.htm` and `.har` only;
+symbolic links are refused, and no other file is read. Files on another host
+are skipped. The crawl is saved as `<domain>/<YYYY-MM-DD>-import`; run
+`audit_site(crawl_id="example.test/2026-10-12-import")` next. Rules that need
+the live site (all site-scope rules: 404 test, host variants, sitemap,
+robots.txt, internal link status, PageSpeed; and page rules that fetch other
+URLs) are listed as "not checked (imported pages only)", never as passed.
 
 ## Install
 
@@ -136,13 +174,15 @@ in `findings.json`.
 
 - `report.md` — summary (≤10 lines), findings grouped by rule (most severe
   first) with URLs, evidence and the platform-specific fix, a Performance
-  section, passed rules, needs-manual-check, platform-skipped rules, and known
-  issues re-verified.
+  section, passed rules, needs-manual-check, platform-skipped rules, rules not
+  checked on imported pages, and known issues re-verified. A bot-protection
+  block gets its own summary line.
 - `findings.json` — `[{rule_id, severity, url, evidence, fix}]`.
 - `urls.csv` — one row per crawled URL with title/meta/canonical/robots stats.
 - `crawl.json` — raw crawl data so rules re-run without network access.
 
-A same-day re-run overwrites `<domain>/<date>/`.
+A same-day re-run overwrites `<domain>/<date>/`. An import is saved under
+`<domain>/<date>-import/`, so it never overwrites a crawl.
 
 ## Rules
 

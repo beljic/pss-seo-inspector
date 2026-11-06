@@ -25,6 +25,10 @@ What pss-seo-inspector can do:
 - measure Core Web Vitals and performance with Google PageSpeed Insights
   (PERF-01..07): performance score, LCP, CLS, INP, FCP, TBT, TTFB;
 - re-audit a saved crawl offline, so rules re-run without touching the network;
+- detect a bot-protection challenge (Cloudflare), report it, and stop after
+  three in a row instead of auditing the challenge page;
+- audit pages you saved in your own browser (`.html` or a DevTools `.har`)
+  offline with `import_pages`, for sites it cannot crawl;
 - write a Markdown report, a findings JSON, a per-URL CSV, and the raw crawl.
 
 ## Install
@@ -48,9 +52,10 @@ Insights API key is read from `$PSS_PAGESPEED_API_KEY`.
 
 | Tool | Arguments | Result |
 |---|---|---|
-| `crawl_site` | `url`, `max_pages?` (200), `rate?` (2.0) | `crawl_id` (`<domain>/<YYYY-MM-DD>`), URL count, platform, sitemap-only and crawl-only URL lists; saves `crawl.json` |
+| `crawl_site` | `url`, `max_pages?` (200), `rate?` (2.0) | `crawl_id` (`<domain>/<YYYY-MM-DD>`), URL count, platform, sitemap-only and crawl-only URL lists, bot-protection block count; saves `crawl.json` |
 | `audit_site` | `url` **or** `crawl_id`, `rules?`, `site_config?`, `max_pages?`, `rate?` | Runs the rules (offline when given a `crawl_id`), runs PageSpeed Insights, writes the reports, returns the summary and `report_path` |
 | `audit_url` | `url`, `rules?` | Quick single-page check with page-scope rules; writes nothing |
+| `import_pages` | `site_url`, `paths` (≤200 `.html`/`.har` files), `urls?` (`{file: url}`) | Builds a crawl from pages saved in your own browser, with no network calls; saves it as `<domain>/<YYYY-MM-DD>-import` for `audit_site(crawl_id=...)` |
 | `list_rules` | `platform?` | Rule ids, descriptions, severities, scopes, platforms |
 | `get_findings` | `crawl_id`, `rule_id?`, `severity?` | Filtered findings from `findings.json` |
 
@@ -68,6 +73,23 @@ before any request is made.
 
 This guarantee applies to the standard, unmodified package installed from a
 trusted source. A user who installs modified code is outside this guarantee.
+
+## Sites behind bot protection
+
+pss-seo-inspector does not bypass bot protection. It never tries to pass,
+solve or avoid a challenge: no browser emulation, no other User-Agent, no
+timing tricks. When a response is a challenge page (for example Cloudflare's
+"Just a moment..."), the URL is counted as blocked and not audited, and the
+crawl stops after three challenges in a row. The report and the tool results
+say "blocked by bot protection (Cloudflare challenge)" with the count.
+
+To audit such a site, either:
+
+- ask the site owner to allow the `pss-seo-inspector/1.0` User-Agent in their
+  bot protection, then crawl normally; or
+- open the pages in your own browser, save them, and run `import_pages` on the
+  files (see [the MCP setup guide](docs/MCP.md#importing-saved-pages)). Rules
+  that need the live site are then reported as not checked.
 
 ## Privacy
 
