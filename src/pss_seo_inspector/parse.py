@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from bs4 import BeautifulSoup, Doctype, Tag
+import re
+from copy import deepcopy
+
+from bs4 import BeautifulSoup, Comment, Doctype, Tag
 from bs4.element import NavigableString, PageElement
 
 from .models import TEXT_MAX, Hreflang, Image, Link, ParsedHTML
@@ -23,6 +26,18 @@ OPAQUE_TAGS = {"script", "style", "noscript", "template", "svg", "math", "title"
 INVISIBLE_TAGS = ["script", "style", "template", "noscript", "svg"]
 LANDMARK_TAGS = ("header", "nav", "footer", "aside")
 QUESTION_TAGS = ["h2", "h3", "h4", "h5", "h6", "summary", "dt"]
+HEADING_TAGS = ["h1", "h2", "h3", "h4", "h5", "h6"]
+# Mount points of client-rendered apps (React, Next.js, Vue, Nuxt, Gatsby, Svelte)
+SPA_ROOT_IDS = ("root", "__next", "app", "__nuxt", "___gatsby", "svelte")
+JS_LINK_PREFIXES = ("javascript:", "#/", "#!")
+NOSNIPPET_TAGS = {"span", "div", "section"}  # Google robots meta tag docs
+OFFSCREEN_RE = re.compile(r"^-\d{3,}(?:\.\d+)?(?:px|em|rem)$")
+# Only unambiguous LLM control tokens; plain phrases like "act as" are normal copy
+INJECTION_RE = re.compile(
+    r"\[/?INST\]|<\|(?:system|im_start|im_end|user|assistant)\|>"
+    r"|ignore (?:all )?(?:previous|prior|above) instructions|#{2,}\s*system\s*:",
+    re.IGNORECASE,
+)
 
 
 def _attr(tag: Tag, name: str) -> str | None:
@@ -111,7 +126,7 @@ class _HeadWalker:
 
 def parse_html(html: str, base_url: str) -> ParsedHTML:
     soup = BeautifulSoup(html, "html.parser")
-    parsed = ParsedHTML()
+    parsed = ParsedHTML(a_href_count=0)
     parsed.head.has_doctype = any(isinstance(item, Doctype) for item in soup.contents)
     base_tag = soup.find("base", href=True)
     if isinstance(base_tag, Tag):
@@ -156,6 +171,12 @@ def parse_html(html: str, base_url: str) -> ParsedHTML:
         href = _attr(a, "href")
         if href is None:
             continue
+        assert parsed.a_href_count is not None
+        parsed.a_href_count += 1
+        if href.strip().lower().startswith(JS_LINK_PREFIXES):
+            parsed.js_link_count += 1
+            if len(parsed.js_link_snippets) < 3:
+                parsed.js_link_snippets.append(snip(str(a), 80))
         link_url = absolutize(base_url, href)
         if link_url is None:
             continue
@@ -221,6 +242,9 @@ def parse_html(html: str, base_url: str) -> ParsedHTML:
         if (_attr(script, "type") or "").lower().strip() == "application/ld+json":
             parsed.jsonld.append(script.get_text().strip())
 
+    parsed.heading_count = len(soup.find_all(HEADING_TAGS))
+    _injection(soup, parsed)
+
     if parsed.og.get("og:type", "").lower() == "product":
         parsed.product_name = parsed.og.get("og:title")
     _visible_text(soup, parsed)  # last: it removes elements from the tree
@@ -250,6 +274,53 @@ def _picture_modern(img: Tag) -> bool:
     )
 
 
+def _inline_styles(tag: Tag) -> dict[str, str]:
+    declarations: dict[str, tuple[str, bool]] = {}
+    for declaration in (_attr(tag, "style") or "").split(";"):
+        name, separator, value = declaration.partition(":")
+        if not separator:
+            continue
+        name, value = name.strip().lower(), value.strip().lower()
+        important = re.search(r"!\s*important\s*$", value)
+        if declarations.get(name, ("", False))[1] and not important:
+            continue
+        declarations[name] = (
+            value[:important.start()].strip() if important else value,
+            important is not None,
+        )
+    return {name: value for name, (value, _) in declarations.items()}
+
+
+def _filter_hidden(root: Tag, ancestors: list[Tag]) -> None:
+    """Filter explicit inline hiding, preserving visibility overrides."""
+    inherited = False
+    for ancestor in reversed(ancestors):
+        styles = _inline_styles(ancestor)
+        if ancestor.has_attr("hidden") or styles.get("display") == "none":
+            root.clear()
+            return
+        if styles.get("visibility") in {"visible", "hidden", "collapse"}:
+            inherited = styles["visibility"] != "visible"
+    pending = [(root, inherited)]
+    while pending:
+        tag, inherited = pending.pop()
+        styles = _inline_styles(tag)
+        if tag.has_attr("hidden") or styles.get("display") == "none":
+            if tag is root:
+                tag.clear()
+            else:
+                tag.decompose()
+            continue
+        hidden = inherited
+        if styles.get("visibility") in {"visible", "hidden", "collapse"}:
+            hidden = styles["visibility"] != "visible"
+        for child in list(tag.children):
+            if isinstance(child, Tag):
+                pending.append((child, hidden))
+            elif hidden:
+                child.extract()
+
+
 def _visible_text(soup: BeautifulSoup, parsed: ParsedHTML) -> None:
     """Fill text, main_text and question_headings. Mutates ``soup``."""
     body = soup.find("body")
@@ -259,20 +330,45 @@ def _visible_text(soup: BeautifulSoup, parsed: ParsedHTML) -> None:
     for tag in root.find_all(True, attrs={"hidden": True}):
         if not tag.decomposed:
             tag.decompose()
+    geo_root = deepcopy(root)
+    _filter_hidden(geo_root, list(root.parents))
+    parsed.time_datetimes = []
+    parsed.time_texts = []
+    for time_tag in geo_root.find_all("time"):
+        value = (_attr(time_tag, "datetime") or "").strip()
+        if value and time_tag.get_text(strip=True) and len(parsed.time_datetimes) < 10:
+            parsed.time_datetimes.append(value)
+            parsed.time_texts.append(snip(time_tag.get_text(" ", strip=True)))
     for tag in root.find_all(QUESTION_TAGS):
         text = " ".join(tag.get_text(" ", strip=True).split())
         if text.endswith("?") and len(parsed.question_headings) < 50:
             parsed.question_headings.append(text)
+    full_text = _lines(geo_root, limit=None)
     parsed.text = _lines(root)
+    parsed.geo_text = full_text[:TEXT_MAX]
+    parsed.geo_word_count = len(full_text.split())
+    parsed.geo_text_truncated = len(full_text) > TEXT_MAX
+    for root_id in SPA_ROOT_IDS:
+        mount = root.find(id=root_id)
+        if isinstance(mount, Tag):
+            parsed.spa_root = f"#{root_id}"
+            parsed.spa_root_chars = len(" ".join(mount.stripped_strings))
+            break
+    for tag in geo_root.find_all(True, attrs={"data-nosnippet": True}):
+        if tag.name not in NOSNIPPET_TAGS and len(parsed.nosnippet_invalid) < 3:
+            parsed.nosnippet_invalid.append(snip(str(tag), 80))
+        if not tag.find_parent(attrs={"data-nosnippet": True}):
+            parsed.nosnippet_words += sum(len(s.split()) for s in tag.stripped_strings)
     for tag in root.find_all(list(LANDMARK_TAGS)):
         tag.decompose()
     parsed.main_text = _lines(root)
 
 
-def _lines(root: Tag) -> str:
+def _lines(root: Tag, limit: int | None = TEXT_MAX) -> str:
     """One line per visible text node, whitespace collapsed, capped."""
     lines = (" ".join(s.split()) for s in root.stripped_strings)
-    return "\n".join(line for line in lines if line)[:TEXT_MAX]
+    text = "\n".join(line for line in lines if line)
+    return text if limit is None else text[:limit]
 
 
 def _meta(meta: Tag, parsed: ParsedHTML) -> None:
@@ -295,6 +391,8 @@ def _meta(meta: Tag, parsed: ParsedHTML) -> None:
     key = prop if prop.startswith("og:") else name if name.startswith("og:") else ""
     if key:
         parsed.og.setdefault(key, content.strip())
+    if prop in ("article:published_time", "article:modified_time"):
+        parsed.meta_dates.setdefault(prop, content.strip())
     tkey = (
         name
         if name.startswith("twitter:")
@@ -302,6 +400,38 @@ def _meta(meta: Tag, parsed: ParsedHTML) -> None:
     )
     if tkey:
         parsed.twitter.setdefault(tkey, content.strip())
+
+
+def _injection(soup: BeautifulSoup, parsed: ParsedHTML) -> None:
+    """LLM control tokens in HTML comments or elements hidden from visitors."""
+    hidden: list[str] = [str(c) for c in soup.descendants if isinstance(c, Comment)]
+    scanned: set[int] = set()  # id() of hidden elements already read
+    for tag in soup.find_all(True):
+        if any(id(parent) in scanned for parent in tag.parents):
+            continue  # its text was already taken with a hidden ancestor
+        if _hides_text(_inline_styles(tag)) or tag.has_attr("hidden"):
+            scanned.add(id(tag))
+            hidden.append(tag.get_text(" ", strip=True))
+    for text in hidden:
+        match = INJECTION_RE.search(text)
+        if match and len(parsed.injection_snippets) < 3:
+            start = max(0, match.start() - 60)
+            parsed.injection_snippets.append(snip(" ".join(text[start:].split())))
+
+
+def _hides_text(styles: dict[str, str]) -> bool:
+    """Inline styles Google's spam policy names as hidden text."""
+    position = styles.get("position") in {"absolute", "fixed"}
+    return (
+        styles.get("display") == "none"
+        or styles.get("visibility") in {"hidden", "collapse"}
+        or re.fullmatch(r"[01](?:\.\d+)?px|0", styles.get("font-size", "")) is not None
+        or styles.get("opacity") in {"0", "0.0"}
+        or (position and any(
+            OFFSCREEN_RE.match(styles.get(side, "")) for side in ("left", "top")
+        ))
+        or OFFSCREEN_RE.match(styles.get("text-indent", "")) is not None
+    )
 
 
 def _anchor_text(a: Tag) -> str:

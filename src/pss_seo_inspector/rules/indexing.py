@@ -8,7 +8,15 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from ..models import Resource, Severity
-from ..urlutil import host_of, normalize, path_of, query_keys, snip, strip_query
+from ..urlutil import (
+    host_of,
+    normalize,
+    path_and_query,
+    path_of,
+    query_keys,
+    snip,
+    strip_query,
+)
 from .base import (
     AuditContext,
     Issue,
@@ -847,22 +855,56 @@ def _idx17(ctx: AuditContext) -> Iterable[Outcome]:
     )
     home = ctx.origin + "/"
     parsed = ctx.robots.parsed
-    for bot in SEARCH_BOTS:
-        if not ctx.robots.allowed(bot.lower(), home):
+    if ctx.crawl.robots is None or parsed.disallow_all:
+        yield Manual("robots.txt unavailable; verify AI bot access and training policy")
+    else:
+        # URLs meant for search: home, sitemap and crawled indexable pages. Pages a
+        # store blocks on purpose (cart, search, sorted lists) are not reported.
+        candidates = [home, *ctx.sitemap_urls]
+        for page in ctx.indexable_pages():
+            candidates.extend((page.url, page.final_url))
+        origin_prefix = normalize(ctx.origin)
+        urls = dict.fromkeys(
+            url
+            for candidate in candidates
+            if (url := normalize(candidate)).startswith(origin_prefix)
+        )
+        for bot in SEARCH_BOTS:
             group = (
                 f"its own group '{bot}'" if parsed.has_group(bot) else "the '*' group"
             )
-            yield Issue(
-                robots_url,
-                f"AI search bot {bot} is blocked from / by {group}; the site will "
-                "not appear in that assistant's search answers",
+            # one finding per blocking line, not per URL
+            by_line: dict[tuple[int, str], list[str]] = {}
+            for url in urls:
+                if ctx.robots.allowed(bot.lower(), url):
+                    continue
+                target = path_and_query(url)
+                rule = max(
+                    (
+                        rule
+                        for rule in parsed.rules_for(bot)
+                        if rule.pattern and rule.regex().match(target)
+                    ),
+                    key=lambda rule: (len(rule.pattern), rule.allow),
+                    default=None,
+                )
+                key = (rule.line, rule.pattern) if rule else (0, "?")
+                by_line.setdefault(key, []).append(target or "/")
+            for (line, pattern), paths in by_line.items():
+                yield Issue(
+                    robots_url,
+                    f"AI search bot {bot} is blocked by {group}: Disallow: {pattern} "
+                    f"(line {line}) blocks {len(paths)} known URL(s), e.g. "
+                    f"{', '.join(paths[:3])}; restricts direct crawling for search "
+                    "answers",
+                )
+        blocked = [b for b in TRAINING_BOTS if not ctx.robots.allowed(b.lower(), home)]
+        if blocked:
+            policy = ", ".join(
+                f"{b}: {'blocked' if b in blocked else 'allowed'}"
+                for b in TRAINING_BOTS
             )
-    blocked = [b for b in TRAINING_BOTS if not ctx.robots.allowed(b.lower(), home)]
-    if blocked:
-        policy = ", ".join(
-            f"{b}: {'blocked' if b in blocked else 'allowed'}" for b in TRAINING_BOTS
-        )
-        yield Issue(robots_url, f"AI training-bot policy: {policy}", Severity.info)
+            yield Issue(robots_url, f"AI training-bot policy: {policy}", Severity.info)
     llms = ctx.probe("IDX-17", "llms.txt")
     if llms is not None and not llms.robots_blocked and llms.status != 200:
         yield Issue(
@@ -1176,7 +1218,8 @@ RULES = [
         category="indexing",
         severity=Severity.medium,
         description="AI bots: search bots (OAI-SearchBot, Claude-SearchBot, "
-        "PerplexityBot) not blocked; training-bot policy and llms.txt (info)",
+        "PerplexityBot) not blocked on known same-origin URLs; training-bot policy "
+        "and llms.txt (info)",
         check=_idx17,
         probes=_idx17_probes,
         fix={

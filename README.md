@@ -19,7 +19,7 @@ What pss-seo-inspector can do:
   Google's matching rules (`*` and `$` wildcards, longest match wins);
 - detect the platform from HTML, headers and asset paths, and apply shared plus
   platform-specific rules with platform-aware fix guidance;
-- run 54 data-driven rules across indexing, metadata, structured data, images,
+- run 59 data-driven rules across indexing, metadata, structured data, images,
   content, and platform specifics, each finding carrying a URL and evidence
   (status/redirect chain or HTML snippet);
 - measure Core Web Vitals and performance with Google PageSpeed Insights
@@ -115,6 +115,7 @@ automatically; the crawler needs no change. Regenerate this table with
 | CONT-01 | medium | all | page | Facts from the site config (e.g. return window) read the same on every page |
 | CONT-02 | low | all | page | No duplicated words, common misspellings or wrong brand spellings in page copy |
 | CONT-03 | low | all | page | Indexable pages have ≥150 words of main content and are not near-duplicates of each other |
+| CONT-06 | high | all | page | No hidden instructions for AI systems: LLM control tokens in comments or hidden text (display:none, opacity 0, font size 0, off-screen) |
 | IDX-01 | high | all | site | Utility pages (search, cart, checkout, account, configured URLs) are noindex or blocked by robots.txt |
 | IDX-02 | critical | all | site | A random non-existent URL returns a real 404 and the 404 page is noindex |
 | IDX-03 | high | all | page | Every indexable page has exactly one absolute, self-referencing canonical; parameter and duplicate URLs canonicalize to the clean URL |
@@ -131,7 +132,8 @@ automatically; the crawler needs no change. Regenerate this table with
 | IDX-14 | high | all | page | Canonical targets are 200, not redirected, indexable and not chained; HTML and Link-header canonicals agree |
 | IDX-15 | medium | all | page | No mixed content: http resources or internal http links on https pages |
 | IDX-16 | low | all | page | Internal links: no nofollow, no empty/generic anchor text, pages within 3 clicks of home |
-| IDX-17 | medium | all | site | AI bots: search bots (OAI-SearchBot, Claude-SearchBot, PerplexityBot) not blocked; training-bot policy and llms.txt (info) |
+| IDX-17 | medium | all | site | AI bots: search bots (OAI-SearchBot, Claude-SearchBot, PerplexityBot) not blocked on known same-origin URLs; training-bot policy and llms.txt (info) |
+| IDX-18 | high | all | page | Links are <a href> URLs (Google does not recommend javascript: links; #/ routes are a heuristic) and content is in the HTML, not an empty app shell |
 | IMG-01 | medium | all | page | <img> has alt text (empty alt only for decorative images, not for linked, logo or product images) |
 | IMG-02 | medium | all | page | Images not larger than 2x their declared width / sizes slot; srcset with w-descriptors has sizes |
 | IMG-03 | low | all | page | Images in WebP/AVIF (or CDN-negotiated), with width/height; first content image not lazy-loaded |
@@ -146,6 +148,7 @@ automatically; the crawler needs no change. Regenerate this table with
 | META-07 | medium | all | page | Head hygiene: title, meta robots, canonical inside <head> and not duplicated; viewport, charset and doctype present |
 | META-08 | low | all | page | Robots meta / X-Robots-Tag values valid; no ignored, expired or snippet-restricting directives |
 | META-09 | medium | all | page | hreflang reciprocity: return links, self reference, x-default, valid codes, 200 targets |
+| META-10 | medium | all | page | data-nosnippet only on span/div/section (Google) and hiding at most 10% of the visible text (threshold is a heuristic) |
 | PERF-01 | high | all | site | PageSpeed Insights overall performance score ≥ 90 |
 | PERF-02 | high | all | site | Largest Contentful Paint (LCP) ≤ 2500 ms |
 | PERF-03 | medium | all | site | Cumulative Layout Shift (CLS) ≤ 0.1 |
@@ -162,6 +165,8 @@ automatically; the crawler needs no change. Regenerate this table with
 | SD-06 | info | all | page | Retired rich-result markup present (FAQPage, ClaimReview, Course, EstimatedSalary, SpecialAnnouncement, Vehicle, Book actions, Dataset, ...) |
 | SD-07 | medium | all | page | Return policy (hasMerchantReturnPolicy + returnPolicyCountry) and shipping (shippingDetails or Organization hasShippingService) declared |
 | SD-08 | medium | all | page | Home page has exactly one WebSite node with name and url (alternateName recommended) |
+| SD-09 | medium | all | page | Publication dates: none in the future and article dates shown on the page (Google); JSON-LD vs article:*_time within 90 days (heuristic) |
+| SD-11 | medium | all | page | Product name and Article headline in JSON-LD appear in the visible page text |
 | SHOP-01 | high | shopify | site | Shopify: /collections/vendors?q= and /collections/types?q= with random values return 404 or noindex |
 | SHOP-02 | medium | shopify | site | Shopify: /collections/all, /blogs/*/tagged/* and .json/?view= alternates are not indexable and linked |
 | SHOP-03 | medium | shopify | site | Shopify: robots.txt keeps the platform default Disallow lines and has no blanket 'Disallow: /' |

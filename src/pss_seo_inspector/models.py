@@ -109,7 +109,28 @@ class ParsedHTML(BaseModel):
     # capped at TEXT_MAX chars. main_text also drops header/nav/footer/aside.
     text: str = ""
     main_text: str = ""
+    # Strict inline visibility evidence for GEO; separate from legacy SEO text.
+    # None means it was not collected in an older crawl.
+    geo_text: str | None = None
+    geo_word_count: int | None = None
+    geo_text_truncated: bool | None = None
     question_headings: list[str] = Field(default_factory=list)  # h2-h6/summary/dt
+    # <a href> count and those a crawler cannot follow (javascript:, #/ and #! routes)
+    a_href_count: int | None = None
+    js_link_count: int = 0
+    js_link_snippets: list[str] = Field(default_factory=list)
+    heading_count: int = 0  # h1-h6
+    # first SPA mount point found (#root, #__next, #app, ...) and its visible text size
+    spa_root: str | None = None
+    spa_root_chars: int = 0
+    nosnippet_words: int = 0  # visible words inside outermost [data-nosnippet]
+    # data-nosnippet on elements Google ignores (it supports span, div, section)
+    nosnippet_invalid: list[str] = Field(default_factory=list)
+    meta_dates: dict[str, str] = Field(default_factory=dict)  # article:*_time
+    time_datetimes: list[str] | None = None  # visible <time datetime>; old crawl: None
+    time_texts: list[str] | None = None  # paired visible labels, capped per element
+    # LLM control tokens in HTML comments or hidden elements
+    injection_snippets: list[str] = Field(default_factory=list)
 
 
 class Resource(BaseModel):

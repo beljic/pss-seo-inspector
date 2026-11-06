@@ -293,7 +293,7 @@ async def test_list_rules_by_platform() -> None:
     ids = [r["id"] for r in result.structured_content["rules"]]
     assert "MAG-01" in ids and "SHOP-01" not in ids and "IDX-01" in ids
     every = await call("list_rules", {})
-    assert len(every.structured_content["rules"]) == 54
+    assert len(every.structured_content["rules"]) == 59
     severity = {r["id"]: r["severity"] for r in every.structured_content["rules"]}
     assert [severity[i] for i in ("SD-04", "SD-05", "SD-06")] == ["info"] * 3
 
