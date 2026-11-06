@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import date
+from importlib.metadata import version
 from typing import Annotated, Any
 
 import httpx2
@@ -29,7 +30,7 @@ from .storage import (
     load_findings,
     save_crawl,
 )
-from .urlutil import domain_of, normalize
+from .urlutil import domain_of, is_public_host, normalize
 
 MAX_DIFF_LIST = 100
 
@@ -163,6 +164,7 @@ async def _crawl_site(
         "platform": crawl.platform,
         "capped": crawl.capped,
         "rate_limited": crawl.rate_limited,
+        "crawl_delay": crawl.crawl_delay,
         "bot_blocked": crawl.bot_blocked,
         "blocked_count": crawl.blocked_count,
         "blocked": blocked_summary(crawl),
@@ -215,7 +217,12 @@ async def _audit_site(
     # single pass; this avoids stale "no data" notes and respects the requested
     # rule scope. PSI failures never crash the audit (run_pagespeed is lenient).
     # Imported pages: no requests at all, so PageSpeed is "not checked".
-    psi_urls = [] if crawl.source == "import" else _pagespeed_urls(crawl, config)
+    # Non-public hosts (localhost, *.local, private IPs): Google cannot reach them.
+    psi_urls = (
+        _pagespeed_urls(crawl, config)
+        if crawl.source != "import" and is_public_host(crawl.host)
+        else []
+    )
     api_key = os.environ.get("PSS_PAGESPEED_API_KEY")
     crawl.pagespeed_results = await run_pagespeed(
         psi_urls, api_key=api_key, transport=psi_transport
@@ -375,6 +382,36 @@ for _function, _name in (
 ):
     mcp.add_tool(_function, name=_name, structured_output=True)
     mcp._tool_manager._tools[_name].parameters["additionalProperties"] = False
+
+
+@mcp.prompt(
+    name="geo",
+    title="GEO report",
+    description="pss-seo-inspector measures the site; the installed seo-geo "
+    "skill (claude-seo plugin) judges it and writes GEO.md",
+)
+def _geo_prompt(url: str | None = None, crawl_id: str | None = None) -> str:
+    if not url and not crawl_id:
+        raise ValueError("Pass a url or a crawl_id")
+    source = f'crawl_id="{crawl_id}"' if crawl_id else f'url="{url}"'
+    pss = f"pss-seo-inspector {version('pss-seo-inspector')}"
+    return f"""Write a GEO (AI search visibility) report.
+
+1. Call the pss-seo-inspector tool audit_site with {source}. Its findings are
+   the measured facts: AI crawler access (IDX-17), server HTML vs JavaScript
+   (IDX-18), structured data (SD-*), dates (SD-09), snippet controls
+   (META-08, META-10), hidden instructions for AI (CONT-06), llms.txt.
+2. Load the installed seo-geo skill from the claude-seo plugin and follow it
+   as written. Use the audit_site findings as evidence; do not invent rules
+   of your own. If seo-geo is not installed, stop here and tell the user:
+   install the claude-seo plugin (/plugin marketplace add
+   AgriciDaniel/claude-seo), then run this prompt again.
+3. Save the report as GEO.md in the same folder as the audit's report.md.
+   Header: "Prepared by: {pss} + seo-geo <skill version> (claude-seo,
+   AgriciDaniel)". Every finding cites the page URL and the HTML or
+   robots.txt it rests on; mark your own judgment and third-party
+   statistics as such, and list what was not checked.
+"""
 
 
 def main() -> None:

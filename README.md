@@ -62,6 +62,20 @@ Insights API key is read from `$PSS_PAGESPEED_API_KEY`.
 Full argument details, report layout, site-config schema, and the PageSpeed
 Insights thresholds are in [the MCP setup guide](docs/MCP.md).
 
+## GEO report (`/geo` prompt)
+
+The server also exposes an MCP prompt, `geo` (`url` **or** `crawl_id`). In
+Claude Code it appears as `/mcp__pss-seo-inspector__geo`. It asks the model
+to run `audit_site`, then judge the site with the `seo-geo` skill from the
+[claude-seo](https://github.com/AgriciDaniel/claude-seo) plugin, using the
+audit findings as evidence, and save `GEO.md` next to `report.md`.
+
+pss-seo-inspector keeps no GEO rubric of its own: the scoring comes from the
+installed `seo-geo` skill, so it stays as current as that plugin. Install
+claude-seo first (`/plugin marketplace add AgriciDaniel/claude-seo`); without
+it the prompt stops and says so. The GEO score is the model's judgment, not
+a measurement.
+
 ## Read-only guarantee
 
 pss-seo-inspector is designed to read public web pages only. It issues
