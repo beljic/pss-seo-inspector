@@ -47,7 +47,7 @@ def _words(text: str) -> int:
 
 MARKS_RE = re.compile(r"[\u00ae\u2122\u00a9\u2120]")  # ® ™ © ℠
 PUNCT = str.maketrans({"\u2013": "-", "\u2014": "-", "\u2011": "-", "\u2019": "'",
-                       "\u2018": "'", "\u201c": '"', "\u201d": '"'})
+                       "\u2018": "'", "\u201c": '"', "\u201d": '"', "\u00d7": "x"})
 
 
 def _normal(text: str) -> str:
@@ -77,12 +77,19 @@ def _crawl_time(ctx: AuditContext) -> datetime:
 # -- IDX-18 -----------------------------------------------------------------
 
 
+def _old_crawl(rule: str, pages: int, what: str) -> Manual:
+    return Manual(
+        f"{rule}: {what} not collected on {pages} page(s) (older crawl); re-crawl"
+    )
+
+
 def _idx18(ctx: AuditContext) -> Iterable[Outcome]:
+    old = 0
     for page in ctx.indexable_pages():
         html = page.html
         assert html is not None
         if html.a_href_count is None:
-            yield Manual(f"{page.final_url}: link counts not collected; re-crawl")
+            old += 1
             continue
         if html.a_href_count == 0:
             yield Issue(page.final_url, "No <a href> links on the page")
@@ -93,36 +100,41 @@ def _idx18(ctx: AuditContext) -> Iterable[Outcome]:
                 f"or #/ routes: {'; '.join(html.js_link_snippets)}",
             )
         words = _words(html.text)
+        # an empty #app can be a widget mount on a normal page; a shell also has
+        # no headings (heuristic thresholds from geo-optimizer audit_js.py)
         if (
             html.spa_root is not None
             and html.spa_root_chars < SPA_SHELL_MAX_CHARS
             and words < SPA_SHELL_MAX_WORDS
+            and html.heading_count == 0
         ):
             yield Issue(
                 page.final_url,
-                f"App shell: {html.spa_root} holds {html.spa_root_chars} characters "
-                f"of text and the page {words} words before JavaScript runs",
+                f"App shell: {html.spa_root} holds {html.spa_root_chars} characters, "
+                f"the page {words} words and no headings before JavaScript runs",
+                severity=Severity.medium,
             )
+    if old:
+        yield _old_crawl("IDX-18", old, "link counts")
 
 
 # -- META-10 ----------------------------------------------------------------
 
 
 def _meta10(ctx: AuditContext) -> Iterable[Outcome]:
+    old = 0
     for page in ctx.indexable_pages():
         html = page.html
         assert html is not None
         total = html.geo_word_count
         if total is None:
-            yield Manual(
-                f"{page.final_url}: full text word count not collected; re-crawl"
-            )
+            old += 1
             continue
         for snippet in html.nosnippet_invalid:
             yield Issue(
                 page.final_url,
-                f"Google ignores data-nosnippet here (only span, div, section): "
-                f"{snippet}",
+                "Google ignores data-nosnippet here (only span, div, section); Bing "
+                f"honours it on any element: {snippet}",
                 severity=Severity.low,
             )
         if not total or not html.nosnippet_words:
@@ -135,20 +147,25 @@ def _meta10(ctx: AuditContext) -> Iterable[Outcome]:
                 f"({ratio:.0%}) from search snippets (and Bing AI summaries)",
                 severity=Severity.medium if ratio > NOSNIPPET_FAIL else Severity.low,
             )
+    if old:
+        yield _old_crawl("META-10", old, "full-text word count")
 
 
 # -- SD-09 ------------------------------------------------------------------
 
 
 def _jsonld_dates(data: PageData) -> list[tuple[str, datetime]]:
-    """(field, date) pairs from every JSON-LD node for the future-date check."""
+    """(type.field, date) pairs of article nodes for the future-date check."""
     dates: list[tuple[str, datetime]] = []
     for flat in data.nodes:
+        kind = next((t for t in ARTICLE_TYPES if t in flat.types), None)
+        if kind is None:
+            continue  # Google's date guidance is about articles, not reviews/offers
         for key in ("datePublished", "dateModified"):
             parsed = _parse_date(flat.node.get(key))
             if parsed is None:
                 continue
-            dates.append((key, parsed))
+            dates.append((f"{kind}.{key}", parsed))
     return dates
 
 
@@ -247,31 +264,33 @@ def _sd09(ctx: AuditContext) -> Iterable[Outcome]:
                     "compare dates by hand"
                 )
             continue
-        article_dated = any(
-            _parse_date(article.get(key)) is not None
+        ld_values = [
+            v
             for key in ("datePublished", "dateModified")
-        )
-        if article_dated and (
-            html.time_datetimes is None or html.time_texts is None
-        ):
+            if isinstance(v := article.get(key), str) and _parse_date(v) is not None
+        ]
+        if not ld_values:
+            pass
+        elif html.time_datetimes is None or html.time_texts is None:
             yield Manual(f"{page.final_url}: visible dates not collected; re-crawl")
-        elif article_dated and not any(
-            _parse_date(value) is not None for value in html.time_datetimes or []
-        ):
-            yield Issue(
-                page.final_url,
-                "Article has a JSON-LD date but no visible dated <time> element",
-                severity=Severity.low,
-            )
-        elif article_dated and not any(
+        elif any(
             _date_label_matches(value, label)
             for value, label in zip(
-                html.time_datetimes or [], html.time_texts or [], strict=False
+                html.time_datetimes, html.time_texts, strict=False
             )
-        ):
+        ) or any(_date_label_matches(v, html.geo_text or "") for v in ld_values):
+            pass  # a <time> label or the page text shows the date
+        elif any(_parse_date(value) is not None for value in html.time_datetimes):
             yield Manual(
                 f"{page.final_url}: visible time label does not establish a date; "
                 "verify by hand"
+            )
+        else:
+            yield Issue(
+                page.final_url,
+                "Article has a JSON-LD date but the page shows no matching date "
+                "(Google asks for a user-visible date)",
+                severity=Severity.low,
             )
         for ld_key, meta_key in (
             ("datePublished", "article:published_time"),
@@ -339,7 +358,12 @@ def _cont06(ctx: AuditContext) -> Iterable[Outcome]:
         html = page.html
         assert html is not None
         for snippet in html.injection_snippets:
-            yield Issue(page.final_url, f"Hidden LLM instruction: {snippet}")
+            # hidden text is named in Google's spam policy; comments are not
+            yield Issue(
+                page.final_url,
+                f"Hidden LLM instruction in {snippet}",
+                severity=None if snippet.startswith("hidden") else Severity.medium,
+            )
 
 
 RULES = [
@@ -354,8 +378,7 @@ RULES = [
         scope="page",
         fix={
             "generic": "Render links as <a href=\"/path\"> and server-render (or "
-            "pre-render) the main content; AI crawlers and many bots do not run "
-            "JavaScript.",
+            "pre-render) the main content so it is in the HTML response.",
         },
     ),
     Rule(
@@ -380,8 +403,9 @@ RULES = [
         check=_sd09,
         scope="page",
         fix={
-            "generic": "Use the real publish/update dates in JSON-LD and meta, show "
-            "them on the page in a <time datetime> element, and keep them in sync.",
+            "generic": "Use the real publish/update dates in JSON-LD, show the same "
+            "date on the page (a <time datetime> element helps), and keep them "
+            "in sync.",
         },
     ),
     Rule(

@@ -32,6 +32,8 @@ SPA_ROOT_IDS = ("root", "__next", "app", "__nuxt", "___gatsby", "svelte")
 JS_LINK_PREFIXES = ("javascript:", "#/", "#!")
 NOSNIPPET_TAGS = {"span", "div", "section"}  # Google robots meta tag docs
 OFFSCREEN_RE = re.compile(r"^-\d{3,}(?:\.\d+)?(?:px|em|rem)$")
+ZERO_SIZE_RE = re.compile(r"^0*(?:\.0+)?(?:px|em|rem|%|pt)?$|^0?\.\d+px$|^1px$")
+PAGE_TAGS = {"html", "body"}
 # Only unambiguous LLM control tokens; plain phrases like "act as" are normal copy
 INJECTION_RE = re.compile(
     r"\[/?INST\]|<\|(?:system|im_start|im_end|user|assistant)\|>"
@@ -299,6 +301,8 @@ def _filter_hidden(root: Tag, ancestors: list[Tag]) -> None:
         if ancestor.has_attr("hidden") or styles.get("display") == "none":
             root.clear()
             return
+        if ancestor.name in PAGE_TAGS:
+            continue  # visibility:hidden on <html>/<body> is an anti-flash trick
         if styles.get("visibility") in {"visible", "hidden", "collapse"}:
             inherited = styles["visibility"] != "visible"
     pending = [(root, inherited)]
@@ -312,7 +316,11 @@ def _filter_hidden(root: Tag, ancestors: list[Tag]) -> None:
                 tag.decompose()
             continue
         hidden = inherited
-        if styles.get("visibility") in {"visible", "hidden", "collapse"}:
+        if tag.name not in PAGE_TAGS and styles.get("visibility") in {
+            "visible",
+            "hidden",
+            "collapse",
+        }:
             hidden = styles["visibility"] != "visible"
         for child in list(tag.children):
             if isinstance(child, Tag):
@@ -357,7 +365,9 @@ def _visible_text(soup: BeautifulSoup, parsed: ParsedHTML) -> None:
     for tag in geo_root.find_all(True, attrs={"data-nosnippet": True}):
         if tag.name not in NOSNIPPET_TAGS and len(parsed.nosnippet_invalid) < 3:
             parsed.nosnippet_invalid.append(snip(str(tag), 80))
-        if not tag.find_parent(attrs={"data-nosnippet": True}):
+        if tag.name in NOSNIPPET_TAGS and not tag.find_parent(
+            NOSNIPPET_TAGS, attrs={"data-nosnippet": True}
+        ):
             parsed.nosnippet_words += sum(len(s.split()) for s in tag.stripped_strings)
     for tag in root.find_all(list(LANDMARK_TAGS)):
         tag.decompose()
@@ -404,19 +414,29 @@ def _meta(meta: Tag, parsed: ParsedHTML) -> None:
 
 def _injection(soup: BeautifulSoup, parsed: ParsedHTML) -> None:
     """LLM control tokens in HTML comments or elements hidden from visitors."""
-    hidden: list[str] = [str(c) for c in soup.descendants if isinstance(c, Comment)]
+    hidden: list[tuple[str, str]] = [
+        ("HTML comment", str(c)) for c in soup.descendants if isinstance(c, Comment)
+    ]
     scanned: set[int] = set()  # id() of hidden elements already read
     for tag in soup.find_all(True):
         if any(id(parent) in scanned for parent in tag.parents):
             continue  # its text was already taken with a hidden ancestor
         if _hides_text(_inline_styles(tag)) or tag.has_attr("hidden"):
             scanned.add(id(tag))
-            hidden.append(tag.get_text(" ", strip=True))
-    for text in hidden:
+            hidden.append(("hidden text", tag.get_text(" ", strip=True)))
+    for where, text in hidden:
         match = INJECTION_RE.search(text)
         if match and len(parsed.injection_snippets) < 3:
             start = max(0, match.start() - 60)
-            parsed.injection_snippets.append(snip(" ".join(text[start:].split())))
+            body = snip(" ".join(text[start:].split()), 200)
+            parsed.injection_snippets.append(f"{where}: {body}")
+
+
+def _is_zero(value: str) -> bool:
+    try:
+        return float(value.rstrip("%")) == 0
+    except ValueError:
+        return False
 
 
 def _hides_text(styles: dict[str, str]) -> bool:
@@ -425,8 +445,8 @@ def _hides_text(styles: dict[str, str]) -> bool:
     return (
         styles.get("display") == "none"
         or styles.get("visibility") in {"hidden", "collapse"}
-        or re.fullmatch(r"[01](?:\.\d+)?px|0", styles.get("font-size", "")) is not None
-        or styles.get("opacity") in {"0", "0.0"}
+        or ZERO_SIZE_RE.match(styles.get("font-size", "-")) is not None
+        or _is_zero(styles.get("opacity", "1"))
         or (position and any(
             OFFSCREEN_RE.match(styles.get(side, "")) for side in ("left", "top")
         ))

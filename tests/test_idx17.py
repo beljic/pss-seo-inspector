@@ -106,7 +106,11 @@ def test_idx17_root_block_does_not_claim_guaranteed_absence() -> None:
         good_crawl(robots_text="User-agent: OAI-SearchBot\nDisallow: /\n")
     )
     assert len(findings) == 1
-    assert "will not appear" not in findings[0].evidence
+    assert findings[0].evidence == (
+        "AI search bot OAI-SearchBot is blocked by its own group 'OAI-SearchBot': "
+        "Disallow: / (line 2) blocks 2 known URL(s), e.g. /, /a; restricts direct "
+        "crawling for search answers"
+    )
 
 
 @pytest.mark.parametrize("status", [None, 503])
